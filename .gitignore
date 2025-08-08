@@ -1,0 +1,12 @@
+# PyInstaller 폴더
+/build/
+/dist/
+
+# PyInstaller 임시 파일
+*.spec
+
+# Python 캐시 및 가상환경
+__pycache__/
+.venv/
+venv/
+env/
