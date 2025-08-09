@@ -8,6 +8,8 @@ import sys
 import ctypes
 import os
 import json
+import re
+from tkinter import ttk, scrolledtext
 
 # --- 기본 설정 ---
 DEFAULT_CHAOS_ORB_POS = (1295, 719)
@@ -21,7 +23,8 @@ DEFAULT_GRID_BOTTOM_BOUNDARY_Y = 761
 STOP_KEY_1 = 'esc'
 STOP_KEY_2 = 'f10'
 CONFIG_FILE = 'poe_roller_config.json'
-VERSION = "v1.1"
+REGEX_FILE = 'poe_regex_patterns.json'
+VERSION = "v1.2"
 # -------------
 
 class MapRollerApp:
@@ -45,9 +48,11 @@ class MapRollerApp:
         self.dragging = None  # 현재 드래그 중인 오버레이
         self.drag_mode = None  # 'move' or 'resize'
         self.drag_start = None
+        self.regex_patterns = {}  # 저장된 정규식 패턴들
         
         # 설정 로드
         self.load_config()
+        self.load_regex_patterns()
         
         # 콘솔 창 숨기기
         self.hide_console()
@@ -99,6 +104,145 @@ class MapRollerApp:
             self.chaos_pos_center = DEFAULT_CHAOS_ORB_POS
             self.chaos_cell_size = DEFAULT_CHAOS_CELL_SIZE
 
+    def load_regex_patterns(self):
+        """저장된 정규식 패턴 로드"""
+        try:
+            if os.path.exists(REGEX_FILE):
+                with open(REGEX_FILE, 'r', encoding='utf-8') as f:
+                    self.regex_patterns = json.load(f)
+        except:
+            self.regex_patterns = {}
+
+    def save_regex_patterns(self):
+        """정규식 패턴 저장"""
+        try:
+            with open(REGEX_FILE, 'w', encoding='utf-8') as f:
+                json.dump(self.regex_patterns, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            messagebox.showerror("저장 오류", f"정규식 저장 실패: {str(e)}")
+
+    def open_regex_manager(self):
+        """정규식 관리 창 열기"""
+        regex_window = tk.Toplevel(self.root)
+        regex_window.title("정규식 관리")
+        regex_window.geometry("600x500")
+        regex_window.attributes('-topmost', True)
+        
+        # 상단 프레임 - 입력 영역
+        input_frame = tk.LabelFrame(regex_window, text="정규식 추가/수정", padx=10, pady=10)
+        input_frame.pack(fill="x", padx=10, pady=10)
+        
+        tk.Label(input_frame, text="제목:").grid(row=0, column=0, sticky="w")
+        title_entry = tk.Entry(input_frame, width=50)
+        title_entry.grid(row=0, column=1, padx=5)
+        
+        tk.Label(input_frame, text="정규식:").grid(row=1, column=0, sticky="nw", pady=5)
+        regex_text = scrolledtext.ScrolledText(input_frame, width=50, height=3)
+        regex_text.grid(row=1, column=1, padx=5, pady=5)
+        
+        # 버튼 프레임
+        btn_frame = tk.Frame(input_frame)
+        btn_frame.grid(row=2, column=1, sticky="e", pady=5)
+        
+        def save_regex():
+            title = title_entry.get().strip()
+            pattern = regex_text.get("1.0", "end-1c").strip()
+            
+            if not title:
+                messagebox.showwarning("경고", "제목을 입력하세요")
+                return
+            if not pattern:
+                messagebox.showwarning("경고", "정규식을 입력하세요")
+                return
+                
+            # 정규식 유효성 검사
+            try:
+                re.compile(pattern)
+            except re.error as e:
+                messagebox.showerror("오류", f"잘못된 정규식: {str(e)}")
+                return
+            
+            self.regex_patterns[title] = pattern
+            self.save_regex_patterns()
+            update_listbox()
+            title_entry.delete(0, tk.END)
+            regex_text.delete("1.0", tk.END)
+            messagebox.showinfo("성공", "정규식이 저장되었습니다")
+        
+        tk.Button(btn_frame, text="저장", command=save_regex, width=10).pack(side=tk.LEFT, padx=2)
+        
+        # 중간 프레임 - 목록
+        list_frame = tk.LabelFrame(regex_window, text="저장된 정규식 목록", padx=10, pady=10)
+        list_frame.pack(fill="both", expand=True, padx=10, pady=5)
+        
+        # 리스트박스와 스크롤바
+        scrollbar = tk.Scrollbar(list_frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        listbox = tk.Listbox(list_frame, yscrollcommand=scrollbar.set, height=10)
+        listbox.pack(side=tk.LEFT, fill="both", expand=True)
+        scrollbar.config(command=listbox.yview)
+        
+        # 선택된 정규식 표시
+        selected_frame = tk.Frame(regex_window)
+        selected_frame.pack(fill="x", padx=10, pady=5)
+        
+        tk.Label(selected_frame, text="선택된 정규식:").pack(anchor="w")
+        selected_text = scrolledtext.ScrolledText(selected_frame, height=3, width=70)
+        selected_text.pack(fill="x", pady=5)
+        
+        # 하단 버튼들
+        bottom_frame = tk.Frame(regex_window)
+        bottom_frame.pack(fill="x", padx=10, pady=10)
+        
+        def update_listbox():
+            listbox.delete(0, tk.END)
+            for title in sorted(self.regex_patterns.keys()):
+                listbox.insert(tk.END, title)
+        
+        def on_select(event):
+            selection = listbox.curselection()
+            if selection:
+                title = listbox.get(selection[0])
+                pattern = self.regex_patterns.get(title, "")
+                selected_text.delete("1.0", tk.END)
+                selected_text.insert("1.0", pattern)
+        
+        def copy_regex():
+            pattern = selected_text.get("1.0", "end-1c").strip()
+            if pattern:
+                regex_window.clipboard_clear()
+                regex_window.clipboard_append(pattern)
+                messagebox.showinfo("복사 완료", "정규식이 클립보드에 복사되었습니다")
+        
+        def delete_regex():
+            selection = listbox.curselection()
+            if selection:
+                title = listbox.get(selection[0])
+                if messagebox.askyesno("삭제 확인", f"'{title}' 정규식을 삭제하시겠습니까?"):
+                    del self.regex_patterns[title]
+                    self.save_regex_patterns()
+                    update_listbox()
+                    selected_text.delete("1.0", tk.END)
+        
+        def load_to_edit():
+            selection = listbox.curselection()
+            if selection:
+                title = listbox.get(selection[0])
+                pattern = self.regex_patterns.get(title, "")
+                title_entry.delete(0, tk.END)
+                title_entry.insert(0, title)
+                regex_text.delete("1.0", tk.END)
+                regex_text.insert("1.0", pattern)
+        
+        tk.Button(bottom_frame, text="복사", command=copy_regex, width=10).pack(side=tk.LEFT, padx=5)
+        tk.Button(bottom_frame, text="수정하기", command=load_to_edit, width=10).pack(side=tk.LEFT, padx=5)
+        tk.Button(bottom_frame, text="삭제", command=delete_regex, width=10).pack(side=tk.LEFT, padx=5)
+        tk.Button(bottom_frame, text="닫기", command=regex_window.destroy, width=10).pack(side=tk.RIGHT, padx=5)
+        
+        listbox.bind('<<ListboxSelect>>', on_select)
+        update_listbox()
+
     def hide_console(self):
         """콘솔 창 숨기기"""
         if sys.platform == 'win32':
@@ -113,7 +257,7 @@ class MapRollerApp:
         self.root.overrideredirect(True)
         self.root.config(bg='black')
 
-        window_width = 550
+        window_width = 580
         window_height = 280
         screen_width = self.root.winfo_screenwidth()
         x_coordinate = screen_width - window_width - 30
@@ -151,14 +295,17 @@ class MapRollerApp:
         button_frame = tk.Frame(self.root, bg="black")
         button_frame.pack(pady=10)
 
-        self.start_button = tk.Button(button_frame, text="시작", command=self.start_automation_thread, width=15, height=2)
-        self.start_button.pack(side=tk.LEFT, padx=5)
+        self.start_button = tk.Button(button_frame, text="시작", command=self.start_automation_thread, width=12, height=2)
+        self.start_button.pack(side=tk.LEFT, padx=3)
         
-        self.setup_button = tk.Button(button_frame, text="위치 설정", command=self.toggle_setup_mode, width=15, height=2, bg="lightblue")
-        self.setup_button.pack(side=tk.LEFT, padx=5)
+        self.setup_button = tk.Button(button_frame, text="위치 설정", command=self.toggle_setup_mode, width=12, height=2, bg="lightblue")
+        self.setup_button.pack(side=tk.LEFT, padx=3)
         
-        quit_button = tk.Button(button_frame, text="프로그램 종료", command=self.quit_app, width=15, height=2)
-        quit_button.pack(side=tk.LEFT, padx=5)
+        regex_button = tk.Button(button_frame, text="정규식 관리", command=self.open_regex_manager, width=12, height=2, bg="lightgreen")
+        regex_button.pack(side=tk.LEFT, padx=3)
+        
+        quit_button = tk.Button(button_frame, text="종료", command=self.quit_app, width=12, height=2)
+        quit_button.pack(side=tk.LEFT, padx=3)
 
     def toggle_setup_mode(self):
         """설정 모드 토글"""
