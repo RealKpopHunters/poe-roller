@@ -436,13 +436,20 @@ class MapRollerApp:
                     break
                 
                 self.root.after(0, self.status_var.set, f"롤링 중... [{i+1}/{len(self.map_coords)}]")
-                
+
+                # 안정적인 클릭을 위해 mouseDown, sleep, mouseUp으로 변경**
+                click_press_delay = 0.02 # 마우스를 누르고 떼는 사이의 미세한 딜레이**
+
                 if speed == "max":
                     pyautogui.moveTo(map_pos, _pause=False)
-                    pyautogui.click(_pause=False)
+                    pyautogui.mouseDown(_pause=False)
+                    time.sleep(click_press_delay)
+                    pyautogui.mouseUp(_pause=False)
                 else:
                     pyautogui.moveTo(map_pos, duration=move_duration)
-                    pyautogui.click()
+                    pyautogui.mouseDown()
+                    time.sleep(click_press_delay)
+                    pyautogui.mouseUp()
                     if click_delay > 0:
                         time.sleep(click_delay)
             
