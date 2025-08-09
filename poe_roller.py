@@ -21,6 +21,7 @@ DEFAULT_GRID_BOTTOM_BOUNDARY_Y = 761
 STOP_KEY_1 = 'esc'
 STOP_KEY_2 = 'f10'
 CONFIG_FILE = 'poe_roller_config.json'
+VERSION = "v1.1"
 # -------------
 
 class MapRollerApp:
@@ -106,7 +107,7 @@ class MapRollerApp:
                 ctypes.windll.user32.ShowWindow(console_window, 0)
 
     def setup_ui(self):
-        self.root.title("PoE 자동 롤러 (조절 가능 버전)")
+        self.root.title(f"PoE 자동 롤러 - {VERSION}") # <-- 수정된 코드
         self.root.attributes('-alpha', 0.9)
         self.root.attributes('-topmost', True)
         self.root.overrideredirect(True)

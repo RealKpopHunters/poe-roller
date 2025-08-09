@@ -1,0 +1,13 @@
+{
+  "chaos_pos": [
+    1403,
+    614
+  ],
+  "chaos_size": 53,
+  "grid_bounds": {
+    "left": 15,
+    "right": 651,
+    "top": 125,
+    "bottom": 761
+  }
+}
