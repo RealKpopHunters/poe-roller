@@ -43,6 +43,9 @@
 
 ---
 
+<video src="https://github.com/user-attachments/assets/99e6f109-299c-4045-8d25-9869cc0a2ed5" autoplay loop muted playsinline width="100%"></video> 
+
+
 ## 📖 사용 방법
 
 ### 1단계: 위치 설정 (최초 한 번만!)
