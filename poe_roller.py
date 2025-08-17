@@ -10,34 +10,43 @@ import os
 import json
 import re
 from tkinter import ttk, scrolledtext
+# Windows API 관련 import (선택적)
+try:
+    import win32gui
+    import win32api
+    import win32con
+    WIN32_AVAILABLE = True
+except ImportError:
+    WIN32_AVAILABLE = False
+    # pywin32가 없어도 기본 기능은 작동하도록 함
 
 # --- 기본 설정 ---
-DEFAULT_CHAOS_ORB_POS = (1295, 719)
-DEFAULT_CHAOS_CELL_SIZE = 53
+# 상대 좌표로 변경 (화면 크기 대비 비율)
+DEFAULT_CHAOS_ORB_POS_RATIO = (0.675, 0.665)  # 화면 대비 비율
+DEFAULT_CHAOS_CELL_SIZE_RATIO = 0.0276  # 화면 너비 대비 비율
 GRID_ROWS = 12
 GRID_COLS = 12
-DEFAULT_GRID_LEFT_BOUNDARY_X = 15
-DEFAULT_GRID_RIGHT_BOUNDARY_X = 651
-DEFAULT_GRID_TOP_BOUNDARY_Y = 125
-DEFAULT_GRID_BOTTOM_BOUNDARY_Y = 761
+DEFAULT_GRID_LEFT_RATIO = 0.0078  # 화면 너비 대비
+DEFAULT_GRID_RIGHT_RATIO = 0.3396  # 화면 너비 대비
+DEFAULT_GRID_TOP_RATIO = 0.1157  # 화면 높이 대비
+DEFAULT_GRID_BOTTOM_RATIO = 0.7046  # 화면 높이 대비
 STOP_KEY_1 = 'esc'
 STOP_KEY_2 = 'f10'
 CONFIG_FILE = 'poe_roller_config.json'
 REGEX_FILE = 'poe_regex_patterns.json'
-VERSION = "v1.2"
+VERSION = "v1.3"
 # -------------
 
 class MapRollerApp:
     def __init__(self, root):
         self.root = root
+        
+        # 화면 정보 초기화
+        self.detect_display_info()
+        
         self.chaos_pos_center = None
-        self.chaos_cell_size = DEFAULT_CHAOS_CELL_SIZE
-        self.grid_bounds = {
-            'left': DEFAULT_GRID_LEFT_BOUNDARY_X,
-            'right': DEFAULT_GRID_RIGHT_BOUNDARY_X,
-            'top': DEFAULT_GRID_TOP_BOUNDARY_Y,
-            'bottom': DEFAULT_GRID_BOTTOM_BOUNDARY_Y
-        }
+        self.chaos_cell_size = None
+        self.grid_bounds = {}
         self.map_coords = []
         self.is_running = False
         self.automation_thread = None
@@ -69,10 +78,296 @@ class MapRollerApp:
         
         # 종료 시 Shift 키 해제를 위한 이벤트 바인딩
         self.root.protocol("WM_DELETE_WINDOW", self.quit_app)
+    
+    def detect_display_info(self):
+        """디스플레이 정보 감지"""
+        try:
+            if WIN32_AVAILABLE:
+                # 주 모니터 정보
+                self.screen_width = win32api.GetSystemMetrics(win32con.SM_CXSCREEN)
+                self.screen_height = win32api.GetSystemMetrics(win32con.SM_CYSCREEN)
+                
+                # DPI 감지
+                try:
+                    # Windows 10+ DPI 인식
+                    ctypes.windll.shcore.SetProcessDpiAwareness(1)
+                    hdc = win32gui.GetDC(0)
+                    self.dpi_x = win32api.GetDeviceCaps(hdc, win32con.LOGPIXELSX)
+                    self.dpi_y = win32api.GetDeviceCaps(hdc, win32con.LOGPIXELSY)
+                    win32gui.ReleaseDC(0, hdc)
+                except:
+                    self.dpi_x = self.dpi_y = 96  # 기본 DPI
+                
+                # DPI 스케일링 팩터
+                self.dpi_scale_x = self.dpi_x / 96.0
+                self.dpi_scale_y = self.dpi_y / 96.0
+                
+                # 가상 화면 크기 (멀티 모니터)
+                self.virtual_screen_width = win32api.GetSystemMetrics(win32con.SM_CXVIRTUALSCREEN)
+                self.virtual_screen_height = win32api.GetSystemMetrics(win32con.SM_CYVIRTUALSCREEN)
+                self.virtual_screen_left = win32api.GetSystemMetrics(win32con.SM_XVIRTUALSCREEN)
+                self.virtual_screen_top = win32api.GetSystemMetrics(win32con.SM_YVIRTUALSCREEN)
+            else:
+                # pywin32가 없는 경우 tkinter로 화면 정보 가져오기
+                self.screen_width = self.root.winfo_screenwidth()
+                self.screen_height = self.root.winfo_screenheight()
+                self.dpi_x = self.dpi_y = 96
+                self.dpi_scale_x = self.dpi_scale_y = 1.0
+                self.virtual_screen_width = self.screen_width
+                self.virtual_screen_height = self.screen_height
+                self.virtual_screen_left = 0
+                self.virtual_screen_top = 0
+            
+        except Exception as e:
+            # 기본값으로 폴백
+            self.screen_width = 1920
+            self.screen_height = 1080
+            self.dpi_x = self.dpi_y = 96
+            self.dpi_scale_x = self.dpi_scale_y = 1.0
+            self.virtual_screen_width = self.screen_width
+            self.virtual_screen_height = self.screen_height
+            self.virtual_screen_left = 0
+            self.virtual_screen_top = 0
+    
+    def ratio_to_absolute(self, x_ratio, y_ratio):
+        """비율 좌표를 절대 좌표로 변환 (DPI 스케일링 고려)"""
+        x = int(x_ratio * self.screen_width)
+        y = int(y_ratio * self.screen_height)
+        return (x, y)
+    
+    def absolute_to_ratio(self, x, y):
+        """절대 좌표를 비율 좌표로 변환 (DPI 스케일링 고려)"""
+        x_ratio = x / self.screen_width
+        y_ratio = y / self.screen_height
+        return (x_ratio, y_ratio)
+    
+    def size_ratio_to_absolute(self, size_ratio):
+        """크기 비율을 절대 크기로 변환 (DPI 스케일링 고려)"""
+        return int(size_ratio * self.screen_width)
+    
+    def size_absolute_to_ratio(self, size):
+        """절대 크기를 비율로 변환 (DPI 스케일링 고려)"""
+        return size / self.screen_width
+    
+    def find_active_monitor(self):
+        """현재 활성 모니터 찾기"""
+        try:
+            if not WIN32_AVAILABLE:
+                # pywin32가 없는 경우 주 모니터 정보만 반환
+                return {
+                    'left': 0,
+                    'top': 0,
+                    'width': self.screen_width,
+                    'height': self.screen_height,
+                    'right': self.screen_width,
+                    'bottom': self.screen_height
+                }
+            
+            # 마우스 커서 위치 가져오기
+            cursor_pos = win32gui.GetCursorPos()
+            
+            # 모든 모니터 정보 가져오기
+            monitors = []
+            def monitor_enum_proc(hMonitor, hdcMonitor, lprcMonitor, dwData):
+                monitors.append({
+                    'handle': hMonitor,
+                    'left': lprcMonitor[0],
+                    'top': lprcMonitor[1],
+                    'right': lprcMonitor[2],
+                    'bottom': lprcMonitor[3],
+                    'width': lprcMonitor[2] - lprcMonitor[0],
+                    'height': lprcMonitor[3] - lprcMonitor[1]
+                })
+                return True
+            
+            win32api.EnumDisplayMonitors(None, None, monitor_enum_proc, 0)
+            
+            # 커서가 있는 모니터 찾기
+            for monitor in monitors:
+                if (monitor['left'] <= cursor_pos[0] < monitor['right'] and
+                    monitor['top'] <= cursor_pos[1] < monitor['bottom']):
+                    return monitor
+            
+            # 기본값으로 주 모니터 반환
+            return {
+                'left': 0,
+                'top': 0,
+                'width': self.screen_width,
+                'height': self.screen_height,
+                'right': self.screen_width,
+                'bottom': self.screen_height
+            }
+            
+        except:
+            # 오류 시 기본 모니터 정보 반환
+            return {
+                'left': 0,
+                'top': 0,
+                'width': self.screen_width,
+                'height': self.screen_height,
+                'right': self.screen_width,
+                'bottom': self.screen_height
+            }
+    
+    def get_poe_window_info(self):
+        """Path of Exile 창 정보 가져오기"""
+        try:
+            if not WIN32_AVAILABLE:
+                return None
+            
+            try:
+                import psutil
+                PSUTIL_AVAILABLE = True
+            except ImportError:
+                PSUTIL_AVAILABLE = False
+            
+            poe_hwnd = None
+            
+            # 1. 실행중인 프로세스에서 PoE 찾기 (psutil 사용 가능한 경우)
+            if PSUTIL_AVAILABLE:
+                poe_processes = [
+                    "PathOfExile_KG.exe",
+                    "PathOfExile.exe", 
+                    "PathOfExile_x64.exe",
+                    "PathOfExile_x64Steam.exe",
+                    "PathOfExile64.exe",
+                    "PoE.exe"
+                ]
+                
+                for proc in psutil.process_iter(['pid', 'name']):
+                    try:
+                        if proc.info['name'] in poe_processes:
+                            # 프로세스가 있으면 해당 프로세스의 창 찾기
+                            def enum_windows_callback(hwnd, windows):
+                                if win32gui.IsWindowVisible(hwnd):
+                                    _, found_pid = win32gui.GetWindowThreadProcessId(hwnd)
+                                    if found_pid == proc.info['pid']:
+                                        # 메인 창인지 확인 (제목이 있고 크기가 적당한)
+                                        title = win32gui.GetWindowText(hwnd)
+                                        rect = win32gui.GetWindowRect(hwnd)
+                                        width = rect[2] - rect[0]
+                                        height = rect[3] - rect[1]
+                                        if width > 300 and height > 200:  # 최소 크기 체크
+                                            windows.append(hwnd)
+                                return True
+                            
+                            windows = []
+                            win32gui.EnumWindows(enum_windows_callback, windows)
+                            if windows:
+                                poe_hwnd = windows[0]  # 첫 번째 유효한 창 선택
+                                break
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        continue
+            
+            # 2. 프로세스로 못 찾았으면 창 제목으로 찾기
+            if not poe_hwnd:
+                poe_titles = [
+                    "Path of Exile",
+                    "Path of Exile 2",
+                    "PoE",
+                    "PathOfExile"
+                ]
+                
+                for title in poe_titles:
+                    poe_hwnd = win32gui.FindWindow(None, title)
+                    if poe_hwnd:
+                        break
+            
+            # 3. 부분 제목 매칭으로 찾기
+            if not poe_hwnd:
+                def enum_windows_callback(hwnd, windows):
+                    if win32gui.IsWindowVisible(hwnd):
+                        title = win32gui.GetWindowText(hwnd).lower()
+                        if any(keyword in title for keyword in ["path of exile", "poe", "pathofexile"]):
+                            rect = win32gui.GetWindowRect(hwnd)
+                            width = rect[2] - rect[0]
+                            height = rect[3] - rect[1]
+                            if width > 300 and height > 200:
+                                windows.append(hwnd)
+                    return True
+                
+                windows = []
+                win32gui.EnumWindows(enum_windows_callback, windows)
+                if windows:
+                    poe_hwnd = windows[0]
+            
+            if not poe_hwnd:
+                return None
+            
+            # 창 위치와 크기 가져오기
+            rect = win32gui.GetWindowRect(poe_hwnd)
+            title = win32gui.GetWindowText(poe_hwnd)
+            
+            return {
+                'hwnd': poe_hwnd,
+                'title': title,
+                'left': rect[0],
+                'top': rect[1],
+                'right': rect[2],
+                'bottom': rect[3],
+                'width': rect[2] - rect[0],
+                'height': rect[3] - rect[1]
+            }
+        except Exception as e:
+            # psutil이 없으면 기존 방식으로 폴백
+            try:
+                poe_titles = [
+                    "Path of Exile",
+                    "Path of Exile 2", 
+                    "PoE",
+                    "PathOfExile"
+                ]
+                
+                poe_hwnd = None
+                for title in poe_titles:
+                    poe_hwnd = win32gui.FindWindow(None, title)
+                    if poe_hwnd:
+                        break
+                
+                if not poe_hwnd:
+                    return None
+                
+                rect = win32gui.GetWindowRect(poe_hwnd)
+                return {
+                    'hwnd': poe_hwnd,
+                    'title': win32gui.GetWindowText(poe_hwnd),
+                    'left': rect[0],
+                    'top': rect[1],
+                    'right': rect[2],
+                    'bottom': rect[3],
+                    'width': rect[2] - rect[0],
+                    'height': rect[3] - rect[1]
+                }
+            except:
+                return None
 
     def save_config(self):
         """현재 설정을 파일로 저장"""
+        # 절대 좌표를 비율로 변환하여 저장
+        chaos_pos_ratio = None
+        if self.chaos_pos_center:
+            chaos_pos_ratio = self.absolute_to_ratio(self.chaos_pos_center[0], self.chaos_pos_center[1])
+        
+        chaos_size_ratio = None
+        if self.chaos_cell_size:
+            chaos_size_ratio = self.size_absolute_to_ratio(self.chaos_cell_size)
+        
+        grid_bounds_ratio = {}
+        if self.grid_bounds:
+            grid_bounds_ratio = {
+                'left_ratio': self.grid_bounds['left'] / self.screen_width,
+                'right_ratio': self.grid_bounds['right'] / self.screen_width,
+                'top_ratio': self.grid_bounds['top'] / self.screen_height,
+                'bottom_ratio': self.grid_bounds['bottom'] / self.screen_height
+            }
+        
         config = {
+            'version': VERSION,
+            'screen_resolution': [self.screen_width, self.screen_height],
+            'chaos_pos_ratio': chaos_pos_ratio,
+            'chaos_size_ratio': chaos_size_ratio,
+            'grid_bounds_ratio': grid_bounds_ratio,
+            # 하위 호환성을 위한 기존 포맷도 유지
             'chaos_pos': self.chaos_pos_center,
             'chaos_size': self.chaos_cell_size,
             'grid_bounds': self.grid_bounds
@@ -89,20 +384,84 @@ class MapRollerApp:
             if os.path.exists(CONFIG_FILE):
                 with open(CONFIG_FILE, 'r') as f:
                     config = json.load(f)
-                    self.chaos_pos_center = tuple(config.get('chaos_pos', DEFAULT_CHAOS_ORB_POS))
-                    self.chaos_cell_size = config.get('chaos_size', DEFAULT_CHAOS_CELL_SIZE)
-                    self.grid_bounds = config.get('grid_bounds', {
-                        'left': DEFAULT_GRID_LEFT_BOUNDARY_X,
-                        'right': DEFAULT_GRID_RIGHT_BOUNDARY_X,
-                        'top': DEFAULT_GRID_TOP_BOUNDARY_Y,
-                        'bottom': DEFAULT_GRID_BOTTOM_BOUNDARY_Y
-                    })
+                    
+                # 새로운 비율 기반 설정이 있는지 확인
+                if 'chaos_pos_ratio' in config and config['chaos_pos_ratio']:
+                    # 비율 기반 설정 로드
+                    chaos_pos_ratio = config['chaos_pos_ratio']
+                    self.chaos_pos_center = self.ratio_to_absolute(chaos_pos_ratio[0], chaos_pos_ratio[1])
+                    
+                    if 'chaos_size_ratio' in config and config['chaos_size_ratio']:
+                        self.chaos_cell_size = self.size_ratio_to_absolute(config['chaos_size_ratio'])
+                    else:
+                        self.chaos_cell_size = self.size_ratio_to_absolute(DEFAULT_CHAOS_CELL_SIZE_RATIO)
+                    
+                    if 'grid_bounds_ratio' in config and config['grid_bounds_ratio']:
+                        ratio_bounds = config['grid_bounds_ratio']
+                        self.grid_bounds = {
+                            'left': int(ratio_bounds['left_ratio'] * self.screen_width),
+                            'right': int(ratio_bounds['right_ratio'] * self.screen_width),
+                            'top': int(ratio_bounds['top_ratio'] * self.screen_height),
+                            'bottom': int(ratio_bounds['bottom_ratio'] * self.screen_height)
+                        }
+                    else:
+                        self.grid_bounds = self.get_default_grid_bounds()
+                        
+                else:
+                    # 기존 절대 좌표 설정이 있다면 로드하되, 현재 해상도에 맞게 스케일링
+                    old_chaos_pos = config.get('chaos_pos')
+                    old_chaos_size = config.get('chaos_size')
+                    old_grid_bounds = config.get('grid_bounds')
+                    old_resolution = config.get('screen_resolution', [1920, 1080])
+                    
+                    if old_chaos_pos and old_resolution:
+                        # 이전 해상도 대비 현재 해상도로 스케일링
+                        scale_x = self.screen_width / old_resolution[0]
+                        scale_y = self.screen_height / old_resolution[1]
+                        
+                        self.chaos_pos_center = (
+                            int(old_chaos_pos[0] * scale_x),
+                            int(old_chaos_pos[1] * scale_y)
+                        )
+                        
+                        if old_chaos_size:
+                            self.chaos_cell_size = int(old_chaos_size * scale_x)
+                        else:
+                            self.chaos_cell_size = self.size_ratio_to_absolute(DEFAULT_CHAOS_CELL_SIZE_RATIO)
+                        
+                        if old_grid_bounds:
+                            self.grid_bounds = {
+                                'left': int(old_grid_bounds['left'] * scale_x),
+                                'right': int(old_grid_bounds['right'] * scale_x),
+                                'top': int(old_grid_bounds['top'] * scale_y),
+                                'bottom': int(old_grid_bounds['bottom'] * scale_y)
+                            }
+                        else:
+                            self.grid_bounds = self.get_default_grid_bounds()
+                    else:
+                        # 기본값 사용
+                        self.load_default_config()
             else:
-                self.chaos_pos_center = DEFAULT_CHAOS_ORB_POS
-                self.chaos_cell_size = DEFAULT_CHAOS_CELL_SIZE
+                # 설정 파일이 없으면 기본값 사용
+                self.load_default_config()
         except:
-            self.chaos_pos_center = DEFAULT_CHAOS_ORB_POS
-            self.chaos_cell_size = DEFAULT_CHAOS_CELL_SIZE
+            # 오류 발생 시 기본값 사용
+            self.load_default_config()
+    
+    def load_default_config(self):
+        """기본 설정 로드"""
+        self.chaos_pos_center = self.ratio_to_absolute(*DEFAULT_CHAOS_ORB_POS_RATIO)
+        self.chaos_cell_size = self.size_ratio_to_absolute(DEFAULT_CHAOS_CELL_SIZE_RATIO)
+        self.grid_bounds = self.get_default_grid_bounds()
+    
+    def get_default_grid_bounds(self):
+        """기본 그리드 경계 계산"""
+        return {
+            'left': int(DEFAULT_GRID_LEFT_RATIO * self.screen_width),
+            'right': int(DEFAULT_GRID_RIGHT_RATIO * self.screen_width),
+            'top': int(DEFAULT_GRID_TOP_RATIO * self.screen_height),
+            'bottom': int(DEFAULT_GRID_BOTTOM_RATIO * self.screen_height)
+        }
 
     def load_regex_patterns(self):
         """저장된 정규식 패턴 로드"""
@@ -251,16 +610,18 @@ class MapRollerApp:
                 ctypes.windll.user32.ShowWindow(console_window, 0)
 
     def setup_ui(self):
-        self.root.title(f"PoE 자동 롤러 - {VERSION}") # <-- 수정된 코드
+        self.root.title(f"PoE 자동 롤러 - {VERSION}")
         self.root.attributes('-alpha', 0.9)
         self.root.attributes('-topmost', True)
         self.root.overrideredirect(True)
         self.root.config(bg='black')
 
-        window_width = 580
-        window_height = 280
-        screen_width = self.root.winfo_screenwidth()
-        x_coordinate = screen_width - window_width - 30
+        # 화면 크기에 비례한 창 크기 계산
+        window_width = min(580, int(self.screen_width * 0.3))
+        window_height = min(280, int(self.screen_height * 0.26))
+        
+        # 창 위치를 화면 우상단에 배치
+        x_coordinate = self.screen_width - window_width - 30
         y_coordinate = 30
         self.root.geometry(f"{window_width}x{window_height}+{x_coordinate}+{y_coordinate}")
 
@@ -269,6 +630,12 @@ class MapRollerApp:
         bold_font = font.Font(family="Malgun Gothic", size=12, weight="bold")
         status_label = tk.Label(self.root, textvariable=self.status_var, fg="lime", bg="black", font=bold_font, wraplength=window_width - 20)
         status_label.pack(pady=5, padx=10)
+        
+        # 화면 정보 표시
+        info_font = font.Font(family="Malgun Gothic", size=8)
+        screen_info = f"해상도: {self.screen_width}x{self.screen_height} | DPI: {self.dpi_x}x{self.dpi_y}"
+        info_label = tk.Label(self.root, text=screen_info, fg="gray", bg="black", font=info_font)
+        info_label.pack(pady=1)
         
         # 위치 설정 안내
         setup_font = font.Font(family="Malgun Gothic", size=9)
@@ -301,11 +668,68 @@ class MapRollerApp:
         self.setup_button = tk.Button(button_frame, text="위치 설정", command=self.toggle_setup_mode, width=12, height=2, bg="lightblue")
         self.setup_button.pack(side=tk.LEFT, padx=3)
         
+        auto_detect_button = tk.Button(button_frame, text="자동 감지", command=self.auto_detect_poe, width=12, height=2, bg="orange")
+        auto_detect_button.pack(side=tk.LEFT, padx=3)
+        
         regex_button = tk.Button(button_frame, text="정규식 관리", command=self.open_regex_manager, width=12, height=2, bg="lightgreen")
         regex_button.pack(side=tk.LEFT, padx=3)
         
         quit_button = tk.Button(button_frame, text="종료", command=self.quit_app, width=12, height=2)
         quit_button.pack(side=tk.LEFT, padx=3)
+    
+    def auto_detect_poe(self):
+        """PoE 창 자동 감지하여 설정"""
+        try:
+            if not WIN32_AVAILABLE:
+                messagebox.showwarning("기능 제한", 
+                    "자동 감지 기능을 사용하려면 pywin32 라이브러리가 필요합니다.\n"
+                    "'위치 설정' 버튼을 사용하여 수동으로 설정해주세요.")
+                return
+                
+            poe_info = self.get_poe_window_info()
+            if not poe_info:
+                messagebox.showwarning("자동 감지 실패", 
+                    "Path of Exile 창을 찾을 수 없습니다.\n"
+                    "게임이 실행중인지 확인하고 다시 시도해주세요.")
+                return
+            
+            # PoE 창 크기에 맞춰 기본 설정 계산
+            poe_width = poe_info['width']
+            poe_height = poe_info['height']
+            
+            # 상대적 위치로 카오스 오브와 인벤토리 위치 추정
+            chaos_x = poe_info['left'] + int(poe_width * 0.675)
+            chaos_y = poe_info['top'] + int(poe_height * 0.665)
+            self.chaos_pos_center = (chaos_x, chaos_y)
+            
+            # 셀 크기도 창 크기에 비례하여 설정
+            self.chaos_cell_size = max(30, int(poe_width * 0.0276))
+            
+            # 그리드 경계 설정
+            self.grid_bounds = {
+                'left': poe_info['left'] + int(poe_width * 0.0078),
+                'right': poe_info['left'] + int(poe_width * 0.3396),
+                'top': poe_info['top'] + int(poe_height * 0.1157),
+                'bottom': poe_info['top'] + int(poe_height * 0.7046)
+            }
+            
+            # 좌표 재생성
+            self.generate_coordinates()
+            
+            # 설정 저장
+            self.save_config()
+            
+            window_title = poe_info.get('title', '알 수 없음')
+            messagebox.showinfo("자동 감지 완료", 
+                f"Path of Exile 창을 감지하여 설정을 완료했습니다.\n"
+                f"감지된 창: {window_title}\n"
+                f"창 크기: {poe_width}x{poe_height}\n"
+                f"좌표 개수: {len(self.map_coords)}개")
+            
+            self.status_var.set(f"자동 감지 완료! 좌표 {len(self.map_coords)}개 생성됨")
+            
+        except Exception as e:
+            messagebox.showerror("오류", f"자동 감지 중 오류가 발생했습니다: {str(e)}")
 
     def toggle_setup_mode(self):
         """설정 모드 토글"""
@@ -640,8 +1064,8 @@ if __name__ == "__main__":
         root = tk.Tk()
         app = MapRollerApp(root)
         
-        # 초기 안내 메시지
-        app.status_var.set("'위치 설정' 버튼을 눌러 영역을 조절하세요")
+        # 초기 안내 메시지  
+        app.status_var.set("'자동 감지' 또는 '위치 설정' 버튼을 눌러 시작하세요")
         
         root.mainloop()
     else:
